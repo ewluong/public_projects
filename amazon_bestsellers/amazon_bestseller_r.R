@@ -72,6 +72,124 @@ df_pivot %>% ggplot(aes(x = Year)) +
   guides(fill = guide_legend(reverse = TRUE))
 
 
+# Create scatterplot with linear regression line of Reviews vs User Rating
+ggplot(df, aes(x = `User.Rating`, y = Reviews)) + 
+  geom_point() +
+  geom_smooth(method = "lm") +
+  labs(x = "User Rating", y = "Number of Reviews") +
+  ggtitle("Correlation Between User Rating and Number of Reviews") +
+  theme_bw()
+
+# Fit a linear regression model for User.Rating vs Reviews
+model = lm(User.Rating ~ Reviews, data = df)
+summary(model)
+
+# Regression analysis shows that there is not much correlation between the two
+
+# Group the data by author and calculate the mean user rating for each author
+author_reviews <- df %>%
+  group_by(Author) %>%
+  summarize(mean_reviews = mean(Reviews, na.rm = TRUE)) %>%
+  arrange(desc(mean_reviews))
+
+# Select the top 10 authors with the highest mean rating
+top_authors <- head(author_reviews, 10)
+top_authors <- arrange(desc(top_authors))
+
+# Create a bar chart of the top authors by mean rating
+ggplot(top_authors, aes(x = reorder(Author, -mean_reviews), y = mean_reviews)) +
+  geom_bar(stat = "identity", fill = "#00BFC4") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Top Authors by Average # of Reviews") +
+  xlab("Author") + ylab("Average Reviews")
+
+
+
+
+
+
+
+
+
+
+
+
+# NLP Top Words in Titles
+library(dplyr)
+library(tidytext)
+library(ggplot2)
+library(tidyverse)
+library(SnowballC)
+library(tm)
+library(wordStem)
+library(dplyr)
+library(stringr)
+library(tm)
+
+# Create a new dataframe with title and reviews columns
+df_title <- df %>% select(Name, Reviews)
+
+# Preprocess the book titles by removing stop words and stemming the remaining words
+preprocess_text <- function(text) {
+  words <- str_split(tolower(text), "\\s+")[[1]]
+  words <- words[!words %in% stopwords('english')]
+  words <- wordStem(words, language = 'english')
+  return(paste(words, collapse = " "))
+}
+
+df_title$Title_Processed <- sapply(df_title$Name, preprocess_text)
+
+# Use DocumentTermMatrix to convert the preprocessed text into a bag-of-words representation
+corpus <- Corpus(VectorSource(df_title$Title_Processed))
+corpus <- tm_map(corpus, tolower)
+corpus <- tm_map(corpus, removePunctuation)
+corpus <- tm_map(corpus, removeNumbers)
+corpus <- tm_map(corpus, removeWords, stopwords('english'))
+corpus <- tm_map(corpus, stemDocument)
+
+# Remove empty documents from the corpus
+corpus <- corpus[!(corpus == "")]
+
+# Create the document-term matrix
+dtm <- DocumentTermMatrix(corpus)
+
+
+
+X <- as.data.frame(as.matrix(dtm))
+
+# Train a linear regression model on the bag-of-words features and the number of reviews
+model <- lm(Reviews ~ ., data = cbind(df_title['Reviews'], X))
+
+# Get the coefficients of the trained model and map them back to the vocabulary
+coefficients <- data.frame(Coefficient = coef(model)[-1])
+rownames(coefficients) <- colnames(X)
+coefficients <- coefficients %>%
+  mutate(word = rownames(coefficients)) %>%
+  arrange(desc(abs(Coefficient))) %>%
+  select(word, Coefficient)
+
+
+# Print the top 10 words or phrases with the highest coefficients
+head(coefficients, 10)
+
+# Plot the top 10 words or phrases with the highest coefficients
+library(ggplot2)
+library(tidyr)
+class(coefficients)
+top_words <- data.frame(Word = rownames(head(coefficients, 30)), Coefficient = head(coefficients, 30)[,1], row.names = NULL)
+
+top_words <- head(coefficients, 30) %>% rownames_to_column("Word")
+top_words <- top_words %>% gather(key = "Category", value = "Value", -Word)
+
+ggplot(top_words, aes(x = Word, y = Value, fill = Category)) +
+  geom_col(position = "dodge") +
+  coord_flip() +
+  labs(title = "Top 10 Words or Phrases with the Highest Coefficients", x = "Word or Phrase", y = "Coefficient")
+
+
+
+
+
 
 
 
@@ -92,8 +210,6 @@ library(gridExtra)
 
 X <- df %>% select(`User.Rating`, Reviews, Price)
 
-# standardize the data
-#X_scaled <- scale(X)
 
 # apply K-means clustering
 k <- 3 # number of clusters to create
@@ -186,3 +302,29 @@ barplot(kmeans$centers[, 'Reviews'], main = 'K-Means Centers for Reviews',
 barplot(kmeans$centers[, 'Price'], main = 'K-Means Centers for Price', 
         xlab = 'Cluster', ylab = 'Price', ylim = c(0, 20), col = '#619CFF')
 
+#Based on this finding, we can tell the publisher that high user ratings do not necessarily translate 
+#to high sales, and that it may be more important to target books that have a broader appeal and are 
+#more likely to receive a large number of reviews and sales, even if they do not have the highest user
+#ratings. However, it may also be worth considering ways to increase the visibility and marketing of 
+#books in the high rating cluster to boost their sales potential.
+
+
+
+# elbow plot to find ideal k-clusters
+
+# Apply K-means clustering for different values of k
+wcss <- vector(mode = "numeric", length = 10)
+for (i in 1:10) {
+  kmeans <- kmeans(X, centers = i, nstart = 25, iter.max = 500, algorithm = "Lloyd")
+  wcss[i] <- kmeans$tot.withinss
+}
+
+# Plot the WCSS values against the number of clusters (k)
+ggplot(data.frame(k = 1:10, wcss = wcss), aes(x = k, y = wcss)) +
+  geom_point() +
+  geom_line() +
+  scale_x_continuous(breaks = seq(1, 10, by = 1)) +
+  labs(title = "Elbow Plot for K-Means Clustering", x = "Number of Clusters (k)", y = "Within-Cluster Sum of Squares (WCSS)")
+
+
+# ideal number of clusters is 3-4 clusters according to the elbow plot using the WCSS (within-cluster sum squares) method
