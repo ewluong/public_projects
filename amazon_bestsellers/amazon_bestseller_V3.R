@@ -4,6 +4,8 @@ library(reshape2)
 library(corrplot)
 library(ggcorrplot)
 library(dplyr)
+library(caTools)
+library(caret)
 
 df <- read.csv('/Users/ericluong/public_projects/amazon_bestsellers/bestsellers with categories.csv')
 
@@ -36,7 +38,7 @@ unique(df$Genre)
 # histogram of user ratings
 summary(df$User.Rating)
 ggplot(df, aes(x = `User.Rating`)) + 
-  geom_histogram(binwidth = 0.1, fill = "purple", color = "black") +
+  geom_histogram(binwidth = 0.1, fill = "lightblue", color = "black") +
   xlab("User Rating") +
   ylab("Count") +
   labs(title = 'Histogram of User Ratings')
@@ -451,6 +453,69 @@ barplot(kmeans$centers[, 'Price'], main = 'K-Means Centers for Price',
 #more likely to receive a large number of reviews and sales, even if they do not have the highest user
 #ratings. However, it may also be worth considering ways to increase the visibility and marketing of 
 #books in the high rating cluster to boost their sales potential.
+
+
+
+
+
+
+
+# GLM Variable Imporance
+
+
+# preprocess the data
+df$Fiction <- ifelse(df$Genre == "Fiction", 1, 0)
+
+# define bestseller as rating of 4.5 or higher and at least 10,000 reviews
+df$Bestseller <- ifelse(df$User.Rating >= 4.5 & df$Reviews >= 10000, 1, 0)
+
+# split the data into training and testing sets
+set.seed(123)
+split <- sample.split(df$Bestseller, SplitRatio = 0.7)
+train <- subset(df, split == TRUE)
+test <- subset(df, split == FALSE)
+
+# train a logistic regression model
+model <- glm(Bestseller ~ User.Rating + Reviews + Price + Year + Fiction, data = train, family = "binomial")
+
+# make predictions on the test set
+predictions <- predict(model, newdata = test, type = "response")
+predicted_classes <- ifelse(predictions > 0.5, 1, 0)
+
+# evaluate the performance of the model
+confusionMatrix(table(predicted_classes, test$Bestseller))
+
+
+# plot variable importance
+importance_df <- data.frame(varImp(model))
+ggplot(importance_df, aes(x = reorder(rownames(importance_df), -Overall), y = Overall)) +
+  geom_bar(stat = "identity", fill = "#0072B2") +
+  coord_flip() +
+  labs(title = "Variable Importance for Bestseller Prediction Model", x = "", y = "Overall Importance")
+
+
+
+# Extra visualizations for glm
+
+
+# combine bestseller and non-bestseller data
+model$Bestseller <- factor(model$Bestseller)
+combined_data <- rbind(train, test)
+
+
+# create scatter plots for user ratings, reviews, and genre
+p3 <- ggplot(model, aes(x = User.Rating, y = Fiction, color = Bestseller)) + 
+  geom_point() + 
+  labs(x = "User Rating", y = "Fiction") +
+  ggtitle("Relationship Between User Rating and Price for Bestsellers vs Non-Bestsellers")
+
+p4 <- ggplot(model, aes(x = Reviews, y = Fiction, color = Bestseller)) + 
+  geom_point() + 
+  labs(x = "Reviews", y = "Fiction") +
+  ggtitle("Relationship Between Reviews and Price for Bestsellers vs Non-Bestsellers")
+
+# display the plots
+gridExtra::grid.arrange(p3, p4, ncol = 2)
 
 
 
