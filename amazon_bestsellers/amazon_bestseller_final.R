@@ -279,6 +279,10 @@ coefficients <- coefficients %>%
   arrange(desc(Coefficient)) %>%
   select(word, Coefficient)
 
+# Summarize Coefficients and P-Value of Model for Significance
+summary(model)
+# all the top words are statistically significant as p<2e-16
+
 
 # Print the top 10 words or phrases with the highest coefficients
 head(coefficients, 10)
@@ -484,7 +488,7 @@ predicted_classes <- ifelse(predictions > 0.5, 1, 0)
 
 # evaluate the performance of the model
 confusionMatrix(table(predicted_classes, test$Bestseller))
-
+# accuracy score of 0.9018 and p-value of 3.802e-14 which is statistically significant
 
 # plot variable importance
 importance_df <- data.frame(varImp(model))
