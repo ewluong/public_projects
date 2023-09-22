@@ -1,6 +1,6 @@
-Project Title: Data-Driven Insights into the Book Market: A Comprehensive Analysis
+## Data-Driven Insights into the Book Market: A Comprehensive Analysis
 
-Abstract:
+### Abstract:
 
 This project aims to uncover the hidden patterns and trends in the book market by analyzing an extensive dataset that includes various features such as user ratings, reviews, and pricing. Utilizing advanced techniques in data science and machine learning, we dissect multiple layers of the market to bring forth actionable insights. Some key analyses conducted in this study include:
 
