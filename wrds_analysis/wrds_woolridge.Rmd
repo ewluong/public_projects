@@ -1,0 +1,213 @@
+---
+title: "Wooldridge Exogeneity Test in Panel Data Models"
+output: html_document
+---
+
+## Introduction
+
+This document expands upon the prior analysis, incorporating advanced data refinement techniques and sophisticated statistical models to dive deeper into the dynamics of firm behavior. We employed a winsorization process on all variables at the 1% and 99% levels, effectively limiting the influence of large outliers on our analysis. Furthermore, we conducted a series of rigorous regression analyses grounded in the theoretical framework proposed by Grieser and Hadlock (2019). Crucially, our models utilized both lagged and lead variables to better capture temporal dynamics and prospective influences. Applying the Wooldridge Exogeneity Test, we analyzed the relationships between firm performance, market valuation, asset structure, and R&D intensity. Our findings illuminate the multifaceted and interdependent nature of these factors in shaping corporate decisions and outcomes, demonstrating the critical value of robust analytical tools in understanding complex business phenomena.
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readr)
+library(dplyr)
+library(stargazer)
+library(plm)
+library(robustbase)
+library(DescTools)
+
+# Load your data and remove NA values
+df <- read_csv("comp_na_daily_all.csv")
+df <- na.omit(df)
+```
+
+## Variable Descriptions
+
+-mlev: Market leverage of the firm.  
+-Q: Tobin's Q, a measure of the market value of a firm's assets relative to their replacement cost.  
+-at: Total assets.  
+-zscore: A measure of financial distress, higher values indicate lower risk.  
+-cfi: Cash flow from operations.  
+-cash: Cash and short-term investments.  
+-tangibility: Tangible assets as a proportion of total assets.  
+-capx_lagat: Capital expenditure lagged and normalized by total assets.  
+-rd_lagat: R&D expenditure lagged and normalized by total assets.  
+-roa: Return on assets, a measure of firm profitability.  
+-sale: Total sales.  
+
+```{r variables}
+# Exclude financials & utilities
+df <- df %>% 
+  filter(!(sich >= 6000 & sich <= 6999)) %>% 
+  filter(!(sich >= 4900 & sich <= 4949))
+
+# Exclude very small firms
+df <- df %>% filter(at >= 5)
+
+# Obtain column names of numeric variables
+numeric_vars <- names(which(sapply(df, is.numeric)))
+
+# Winsorize numeric variables
+df <- df %>%
+  mutate_at(.vars = numeric_vars, .funs = ~DescTools::Winsorize(., probs = c(0.01, 0.99)))
+
+
+# Construct new variables
+df <- df %>% 
+  mutate(blev = dltt / at, 
+         mlev = (dltt + prcc_f * csho) / at,
+         debtiss_lagat = lag(dlc) / lag(at), 
+         eqiss_lagat = lag(ceq) / lag(at), 
+         capx_lagat = lag(capx) / lag(at), 
+         rd_lagat = ifelse(is.na(lag(xrd)), 0, lag(xrd) / lag(at)), 
+         q = (at + prcc_f * csho - ceq) / at, 
+         roa = ebit / at, 
+         logsale = log(sale), 
+         logmktcap = log(prcc_f * csho), 
+         zscore = (ebit + 1.2 * re + 1.4 * wcap) / at, 
+         ppent_at = ppent / at, 
+         cf = (ebit + txpd - capx) / at, 
+         cash = che / at)
+df <- df %>% filter(logmktcap > 0)
+df <- df %>% filter(logsale > 0)
+
+```
+
+## Empirical Models
+
+The next step is estimating the empirical models following the approach of Grieser and Hadlock (2019). We estimate firm capital structure, investment, and performance using panel regression models.
+
+```{r capitalstructure}
+
+# Check for duplicate observations
+dupes <- table(index(df), useNA = "ifany")
+
+# Keep the first observation for each id-time combination
+df <- df %>% distinct(gvkey, fyear, .keep_all = TRUE)
+
+# Estimating models for Capital Structure, Investment, and Performance
+df <- df %>%
+  arrange(gvkey, fyear) %>%
+  group_by(gvkey) %>%
+  mutate(
+    Q_lag = lag(q),
+    at_lag = lag(at),
+    cash_lag = lag(cash),
+    ppent_at_lag = lag(ppent_at)
+  )
+
+# a. Capital Structure: Market leverage (mlev)
+formula_mlev <- mlev ~ Q_lag + log(at_lag) + zscore + cf + cash_lag + ppent_at_lag
+model_mlev_pooled <- plm(formula_mlev, data = df, index = c("gvkey", "fyear"), model = "pooling")
+model_mlev_fe <- plm(formula_mlev, data = df, index = c("gvkey", "fyear"), model = "within")
+model_mlev_re <- plm(formula_mlev, data = df, index = c("gvkey", "fyear"), model = "random")
+
+# b. Investment: Capital expenditure (capx_lagat) and R&D (rd_lagat)
+formula_capx <- capx_lagat ~ Q_lag + log(at_lag) + zscore + cf + cash_lag + ppent_at_lag
+formula_rd <- rd_lagat ~ Q_lag + log(at_lag) + zscore + cf + cash_lag + ppent_at_lag
+model_capx_pooled <- plm(formula_capx, data = df, index = c("gvkey", "fyear"), model = "pooling")
+model_capx_fe <- plm(formula_capx, data = df, index = c("gvkey", "fyear"), model = "within")
+model_capx_re <- plm(formula_capx, data = df, index = c("gvkey", "fyear"), model = "random")
+model_rd_pooled <- plm(formula_rd, data = df, index = c("gvkey", "fyear"), model = "pooling")
+model_rd_fe <- plm(formula_rd, data = df, index = c("gvkey", "fyear"), model = "within")
+model_rd_re <- plm(formula_rd, data = df, index = c("gvkey", "fyear"), model = "random")
+
+# c. Performance: Tobin’s Q (Q) and Return-on-assets (roa)
+formula_q <- q ~ rd_lagat + log(sale) + roa
+formula_roa <- roa ~ Q_lag + log(sale) + rd_lagat
+model_q_pooled <- plm(formula_q, data = df, index = c("gvkey", "fyear"), model = "pooling")
+model_q_fe <- plm(formula_q, data = df, index = c("gvkey", "fyear"), model = "within")
+model_q_re <- plm(formula_q, data = df, index = c("gvkey", "fyear"), model = "random")
+model_roa_pooled <- plm(formula_roa, data = df, index = c("gvkey", "fyear"), model = "pooling")
+model_roa_fe <- plm(formula_roa, data = df, index = c("gvkey", "fyear"), model = "within")
+model_roa_re <- plm(formula_roa, data = df, index = c("gvkey", "fyear"), model = "random")
+
+```
+
+
+```{r stargazer}
+# Create a list of the models for each part
+model_list_a <- list(model_mlev_pooled, model_mlev_fe, model_mlev_re)
+model_list_b <- list(model_capx_pooled, model_capx_fe, model_capx_re, model_rd_pooled, model_rd_fe, model_rd_re)
+model_list_c <- list(model_q_pooled, model_q_fe, model_q_re, model_roa_pooled, model_roa_fe, model_roa_re)
+
+# Generate the summary tables using stargazer
+table_a <- stargazer::stargazer(model_list_a, title = "Regression Results - Part A", type = "text")
+table_b <- stargazer::stargazer(model_list_b, title = "Regression Results - Part B", type = "text")
+table_c <- stargazer::stargazer(model_list_c, title = "Regression Results - Part C", type = "text")
+
+# Print the tables
+print(table_a)
+print(table_b)
+print(table_c)
+
+```
+
+The regression results presented in the stargazer output provide insights into the relationship between various independent variables and the dependent variables of interest. The coefficients and their associated standard errors offer valuable information about the direction and significance of these relationships. For instance, in Model 1, the coefficient of 1.000 for the variable "Q_lag" suggests that an increase of one unit in the lagged value of Tobin's Q is associated with a one-unit increase in market leverage (mlev), all else being equal. Similarly, the coefficients for other variables indicate their respective impacts on the dependent variables. The R-squared values indicate the goodness-of-fit of the models, showing how well the independent variables explain the variation in the dependent variables. The F-statistics test the overall significance of the models. Overall, these findings shed light on the factors influencing capital structure, investment, and performance in line with the research models used.
+
+### Woolridge Exogeneity
+
+- q-lead: This variable is created by taking the lead of the q variable. The lead operation shifts the series one period forward. This means for each company, we are taking the following year's q value and aligning it with the current year. This variable will enable us to investigate whether future q values (i.e., Tobin's Q ratio) have an impact on the current year's variables.  
+
+- at_lead: Similarly to Q_lead, this variable is created by taking the lead of the at variable. By doing this, we can investigate whether future at values (i.e., Total Assets) affect the current year's variables.  
+
+- cash_lead: This is a lead variable created from cash, showing the next year's cash value for the current year. It helps us analyze the impact of future cash levels on current outcomes.  
+
+ppent_at_lead: This lead variable is derived from ppent_at, providing us with the next year's Property, Plant, and Equipment to Total Assets ratio for the current year. This can be used to investigate if future investment in property, plant, and equipment influences the current year's variables.  
+
+rd_lagat_lead: This is a lead variable for rd_lagat, which provides the next year's value for the current year. It enables us to examine the impact of future research and development intensity on the current year's variables.  
+
+```{r lead}
+df <- df %>%
+  arrange(gvkey, fyear) %>%
+  group_by(gvkey) %>%
+  mutate(
+    Q_lead = dplyr::lead(q),
+    at_lead = dplyr::lead(at),
+    cash_lead = dplyr::lead(cash),
+    ppent_at_lead = dplyr::lead(ppent_at),
+    rd_lagat_lead = dplyr::lead(rd_lagat)
+  )
+```
+
+## Woolridge Exogeneity Test
+
+```{r woolridge}
+# a. Capital Structure: Market leverage (mlev)
+formula_mlev_exog <- mlev ~ Q_lag + log(at_lag) + zscore + cf + cash_lag + ppent_at_lag + Q_lead
+model_mlev_exog <- plm(formula_mlev_exog, data = df, index = c("gvkey", "fyear"), model = "within")
+
+# b. Investment: Capital expenditure (capx_lagat) and R&D (rd_lagat)
+formula_capx_exog <- capx_lagat ~ Q_lag + log(at_lag) + zscore + cf + cash_lag + ppent_at_lag + Q_lead
+formula_rd_exog <- rd_lagat ~ Q_lag + log(at_lag) + zscore + cf + cash_lag + ppent_at_lag + Q_lead
+model_capx_exog <- plm(formula_capx_exog, data = df, index = c("gvkey", "fyear"), model = "within")
+model_rd_exog <- plm(formula_rd_exog, data = df, index = c("gvkey", "fyear"), model = "within")
+
+# c. Performance: Tobin’s Q (Q) and Return-on-assets (roa)
+formula_q_exog <- q ~ rd_lagat + log(sale) + roa + rd_lagat_lead
+formula_roa_exog <- roa ~ Q_lag + log(sale) + rd_lagat + Q_lead
+model_q_exog <- plm(formula_q_exog, data = df, index = c("gvkey", "fyear"), model = "within")
+model_roa_exog <- plm(formula_roa_exog, data = df, index = c("gvkey", "fyear"), model = "within")
+
+
+# Generate the summary table using stargazer
+model_list_exog <- list(model_mlev_exog, model_capx_exog, model_rd_exog, model_q_exog, model_roa_exog)
+table_exog <- stargazer(model_list_exog, title = "Wooldridge Exogeneity Test Results", type = "text")
+```
+
+
+## Results
+
+In conducting the Wooldridge exogeneity test, we have incorporated both lead and lag variables in our panel data models. The statistically significant coefficients associated with our lead variables imply that our predictors do not satisfy the strict exogeneity condition. This suggests a predictive dynamic where current decisions on capital structure, investment, and performance within firms are, to some extent, shaped by anticipations about future economic conditions.
+
+The results of our Wooldridge Exogeneity Test bring to light several notable outcomes across our different models. In the mlev, capx_lagat, and rd_lagat models, the Q_lag variable is statistically significant with a positive coefficient, indicating that past values of Q significantly influence these variables. However, the Q_lead variable demonstrates a negative relationship, implying that future expectations of Q inversely affect these variables. In contrast, the q model reveals a negative coefficient for rd_lagat_lead, suggesting that anticipated future increases in rd_lagat may correspond with a decrease in q.
+
+When we consider firm size, as measured by log(at_lag), it's clear that it exerts a positive impact on mlev but imparts a negative effect on capx_lagat and rd_lagat. This pattern is mirrored in the Zscore and cash_lag variables, which show positive correlations with mlev but negative correlations with capx_lagat and rd_lagat.
+
+Property, plant, and equipment to total assets ratio, represented by ppent_at_lag, significantly influences the mlev and capx_lagat models in a positive manner but exhibits a less substantial impact on the rd_lagat model.
+
+Looking at the q model, a pronounced positive relationship between q and rd_lagat is discernible, contrasted by a negative relationship with log(sale) and rd_lagat_lead. In the roa model, we see a positive correlation with Q_lag and Q_lead, offset by a negative correlation with rd_lagat.
+
+The high R-squared values associated with the mlev, capx_lagat, and rd_lagat models suggest that our predictors explain a substantial portion of the variability in these dependent variables. However, the lower R-squared values found in the q and roa models suggest a weaker goodness of fit. We should caution against the uncritical interpretation of these R-squared values, though, as they can sometimes present a misleading picture of model fit, particularly as they tend to inflate with the inclusion of more variables, regardless of whether these additional variables offer any substantive explanatory power.
+
