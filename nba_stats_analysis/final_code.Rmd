@@ -1,0 +1,225 @@
+---
+title: 'NBA Player Stats on Salary'
+author: "Eric Luong, Adam Drucker, David Chien"
+
+date: "11/14/22"
+output:
+  html_document: default
+  header-includes: \usepackage{color}
+fontsize: 12pt
+margin: 1in
+---
+
+## Abstract
+*Here we examine the impact of nba stats on salaries using the data set nba-salaries.csv and season_stats.csv. The explanatory variable of interest is player efficiency rating (PER) which takes into account stats such as points, rebounds, assists, steals and blocks, etc.), points (PTS), and usage rating (USG% is the percentage of team plays a player was involved in, while he was on the floor. If the play ends in one of the three true results: field-goal attempts, free throws, or a turnover, it will count toward the player's USG%). We are sourcing our NBA player stat data from a Kaggle dataset (originally scraped from basketball-reference.com) for the last 20 years and our salary data from a Kaggle dataset, and another salary dataset from github. Through some exploratory data analysis and multiple linear regressions, we can determine which variables are important in predicting NBA player salary.*
+
+## Question and Associated Hypothesis
+*Can historical NBA statistics be used in predicting NBA player salaries?* 
+
+**Dependent Variable**: Salary in USD  
+**Explanatory Variable of Interest**: Player Efficiency Rating (PER), Points (PTS), Usage Rating (USG%)  
+
+
+## Data
+*Data retrieved from Kaggle: https://www.kaggle.com/datasets/drgilermo/nba-players-stats*  
+*Data retrieved from github: https://github.com/erikgregorywebb/datasets/blob/master/nba-salaries.csv*  
+*The data set covers 24692 observations and 52 descriptive variables about NBA player stats. However we are only taking a look at the following listed variables of interest.*  
+
+* **Player**: Name of NBA player
+* **Position**: Player position as a factor
+* **Salary**: Annual income
+* **Player Efficiency Rating (PER)**: Player contribution rating
+* **Points (PTS)**: Total points scored in a season
+* **Usage Rating (USG%)**: Measure of how much a player takes part in team plays
+
+```{r setup, echo=FALSE, message=F, warning=F}
+
+# Clear the working space
+    rm(list = ls())
+
+
+### Load the packages (all must have been installed)
+    library(tidyverse)
+    library(doBy)
+    library(foreign)
+    library(knitr)
+    library(lmtest)
+    library(readstata13)
+    library(sandwich)
+    library(stargazer)
+    library(AER)
+    library(gdata)
+    library(wooldridge)
+    library(openintro)
+    library(dplyr)
+    library(ggcorrplot)
+
+cse = function(reg) {
+  rob = sqrt(diag(vcovHC(reg, type = "HC1")))
+  return(rob)
+}
+```
+
+
+
+```{r data, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+
+### Data section: loading data from nba csv files, merging, and cleaning
+nba_salaries = read.csv("nba-salaries.csv", header=T, sep=",")
+season_stats = read.csv("Seasons_Stats.csv", header=T, sep=',')
+names(season_stats)[names(season_stats) == 'Player'] = 'name'
+
+nba_salaries = nba_salaries[c('name', 'position', 'salary')]
+season_stats = season_stats[c('name', 'PER', 'PTS', 'USG.')]
+
+season_stats <- na.omit(season_stats)
+season_stats <- aggregate(season_stats, list(season_stats$name), mean)
+names(season_stats)[names(season_stats) == 'Group.1'] = 'name'
+season_stats = season_stats[-c(2)]
+str(nba_salaries)
+str(season_stats)
+```
+
+
+### Descriptive Statistics
+
+```{r cleaning, echo=FALSE, message=FALSE, warning=FALSE}
+
+# take the avg of stats and salaries across each player's seasons as df_avg
+df = merge(x = nba_salaries, y = season_stats, by = "name", all = TRUE)
+
+df = na.omit(df)
+df_avg = aggregate(df, list(df$name, df$position), mean)
+names(df_avg)[names(df_avg) == 'Group.1'] = 'name'
+names(df_avg)[names(df_avg) == 'Group.2'] = 'position'
+df_avg = df_avg[-c(3, 4)]
+
+# removing bad data points
+df_avg = subset(df_avg, name != 'Jiri Welsch' & name!='Eddy Curry')
+df_avg$position = as.numeric(factor(df_avg$position))
+head(df_avg)
+```
+$$USG percentage = \frac{100((FGA+0.44*FTA+TOV)*\frac{TmMP}{5})}{(MP*TmTRB+OppTRB)}$$
+$$PER = \frac{(PTS+REB+AST+STL+BLK-MissedFG-TO)}{GP}$$
+$$PTS = Total Points$$
+```{r descriptive, echo=FALSE, message=FALSE, warning=FALSE}
+
+# stargazer descriptive statistics for variables of interest
+stargazer(df_avg[c("salary", "PER", "PTS", "USG.")], type="text", digits=2, title="Salary and NBA Stats", flip=FALSE, covariate.labels=c("salary", "PER", "PTS", "USG."))
+
+```
+**Descriptive Statistics**
+*From the descriptive statistics, we can observe that the mean of salary is 3.3 million with a standard deviation of 3.4 million and a max of 19.4 million. This indicates that the distribution is right skewed with top players earning a lot more than the average player. We can also see that PER has an outlier at the minimum of -48.60. PTS has a similar pattern to salary where the mean is 369.28, while the maximum is 2056.21. This indicates that the top scorers have more points than the average player. USG% has a mean of 18.53 but a relatively small standard deviation of 4.34, meaning the distribution is densely clustered around the mean. After cleaning and aggregating the data we are left with 1413 observations for each variable.*
+
+### Exploratory Data Analysis
+
+```{r corrplot, echo=FALSE, message=FALSE, warning=FALSE}
+# construct correlation matrix and visualization
+corr = round(cor(df_avg[c('salary', 'PER', 'PTS', 'USG.')]), 1)
+p_matrix = cor_pmat(df_avg[c('salary', 'PER', 'PTS', 'USG.')])
+p_matrix
+ggcorrplot(corr)
+```
+  
+  
+**Correlation Matrix**
+*The correlation matrix above visualizes the correlation between each of our variables. From this matrix, we can observe that PTS has the highest correlation with salary followed by USG and PER. However, PTS is also slightly correlated with USG and PER, indicating simultaneous causality bias.*
+
+```{r scatterplot, echo = FALSE, message = FALSE, warning = FALSE}
+
+# ggplot scatter plot of wage and looks
+ggplot(df_avg, aes(x=salary)) + geom_density(col = 'blue') + theme( axis.line = element_line(colour = "darkblue", size = 1, linetype = "solid"))
+
+ggplot(df_avg, aes(x=PTS, y=salary)) + geom_point(col="blue") + labs(title = "PTS vs Salary", x = "PTS", y = "Salary") + theme( axis.line = element_line(colour = "darkblue", size = 1, linetype = "solid"))
+ggplot(df_avg, aes(x=PER, y=salary)) + geom_point(col="blue") + labs(title = "PER vs Salary", x = "PER", y = "Salary") + theme( axis.line = element_line(colour = "darkblue", size = 1, linetype = "solid"))
+ggplot(df_avg, aes(x=USG., y=salary)) + geom_point(col="blue") + labs(title = "USG vs Salary", x = "USG", y = "Salary") + theme( axis.line = element_line(colour = "darkblue", size = 1, linetype = "solid"))
+```
+  
+  
+**Scatterplot & Density Curve**
+*The above data visualizations are scatterplots of each of the independent variables plotted against salary, as well as a density curve of salary. The density curve supports our hypothesis above based on the summary table that the distribution is skewed toward the right. The PTS vs Salary scatterplot seems to show some kind of positive correlation between the two. The PER vs Salary plot indicates a dense cluster in the midrange with higher PER ratings correlated with higher salaries. The USG vs Salary plot at first glance shows an increasing variance in salary as USG increases.*
+
+```{r table1, echo=FALSE, message=FALSE, warning=FALSE, comment=""}
+ggplot(df_avg, aes(x=position, y=salary)) + geom_point(col="blue") + labs(title = "Position vs Salary", x = "USG", y = "Salary")
+
+df_position = aggregate(df_avg, list(df_avg$position), mean)
+df_position
+```
+
+
+```{r table2, echo=FALSE, message=FALSE, warning=FALSE, comment=""}
+
+findoutlier <- function(x) {
+  return(x < quantile(x, .15) - 1.5*IQR(x) | x > quantile(x, .85) + 1.5*IQR(x))
+}
+
+df_avg <- df_avg %>%
+        group_by(position) %>%
+        mutate(outlier = ifelse(findoutlier(salary), name, NA))
+
+df_avg$position = as.factor(df_avg$position)
+ggplot(df_avg, aes(x=position, y=salary)) + geom_boxplot(col="black") + labs(title = "Position vs Salary", x = "Position", y = "Salary") + geom_text(aes(label = outlier), na.rm = TRUE, hjust = -0.2, size = 2) + theme( axis.line = element_line(colour = "darkblue", size = 1, linetype = "solid")) + scale_x_discrete(breaks=c("1", "2", "3", "4", "5", "6", "7"), labels=c("C", "F", "G", "PF", "PG", "SF", "SG"))
+
+```
+  
+  
+**Position vs. Salary**
+*The Position vs Salary boxplot above was creating by grouping by position. We can see that on average Centers and Power Forwards make the most while Guards make the least. However, among the outliers of earners in the NBA, most of the highest paid players are perimeter players such as Point Guards.*
+
+### Regression Analysis
+
+```{r table3, echo=FALSE, message=FALSE, warning=FALSE, comment=""}
+
+# Multiple linear regressions and stargazer to display regression results
+
+
+lm1 = lm(salary~PTS, data = df_avg)
+lm2 = lm(salary~PTS+PER, data = df_avg)
+lm3 = lm(salary~PTS+PER+USG., data = df_avg)
+lm4 = lm(salary~PTS+PER+USG.+I(USG.^2), data = df_avg)
+
+
+stargazer(lm1, lm2, lm3, lm4, se = list(cse(lm1), cse(lm2), cse(lm3), cse(lm4)), title = "Salary vs NBA Stats", type = 'text', star.cutoffs = NA, df = FALSE, digits = 3)
+
+summary(lm4)
+
+lht(lm4,c("USG.=0", "PER=0"), white.adjust="hc1")
+```
+
+**Multiple Linear Regression Analysis**
+*After testing multiple control variables and running a linear hypothesis test, we decide to use Regression 4 as our baseline regression for our Multiple Linear Regression Model as we cannot accept the hypothesis that USG = 0 and PER = 0. In regression 4, we added the quadratic variable of USG^2 which is statistically significant as the 0.001 level of significance. This increased our adjusted R2 value from regression 3 to 0.698 indicating a better fit. Based on the positive coefficients of USG^2, higher values of USG have increasingly greater effects on player salary. However, low USG values have a negative impact on salary based on the linear USG term. The coefficient for PER increased dramatically after we added USG^2 in regression 4, indicating downward omitted variable bias in regression 3. PTS has a positive coefficient of 8265.162 which remains relatively stable across the multiple regressions. Therefore, holding all other variable constant, an increase of 1 point is associated with an salary increase of $8265.162. As for PER, an 1 point increase in a players PER rating is associated with a $40698.63 increase in salary.*
+  
+  
+```{r lht, echo=FALSE, message=FALSE, warning=FALSE, comment=""}
+# plotting the regressions
+ggplot() + geom_point(data = df_avg, aes(x=PTS, y=salary, color = USG., size = PER), alpha = 5/10) + scale_color_gradientn(colours = rainbow(99999)) + scale_size_binned(range = c(0,3)) +
+        labs(title = "Salary, PTS, and USG", x = "PTS", y = "Salary") +
+        stat_smooth(data = df_avg, method=glm, col = "darkblue", se=FALSE, aes(x=PTS, y=salary)) + theme( axis.line = element_line(colour = "darkblue", size = 1, linetype = "solid"))
+```
+
+### Test Prediction
+
+```{r prediction, echo=FALSE, message=FALSE, warning=FALSE, comment=""}
+# prediction based on linear model 4 and for player stats similar to Lebron, Kobe, and Curry
+newdata <- data.frame(PTS = 1786, PER = 14.9, USG. = 34.9)
+predict(lm4, newdata)
+
+```
+**Test Prediction**
+*Here we created a fake NBA player stat similar to stats of the top players such as Lebron, Kobe, and Curry. Using the predict function alongside our baseline regression, our model predicts that a player with PTS = 1786, PER = 14.9, and USG% = 34.9 would make on average $16,215,167 annually throughout their careers.*
+
+
+## Conclusion
+
+*In conclusion, our findings indicate that PTS is the strongest predictor for NBA player salary followed by PER and USG%. These 3 variables capture approximately 69.8% of the variance based on our adjusted R2. While our analysis may only be applicable for players after the year 2000, it is still applicable to the current NBA playerbase. Based on hypothesis testing, PTS, PER, and USG are all statistically significant in determining NBA player salaries. Although there are some outliers in our data, we chose not to omit them since we want a holistic analysis of all NBA players and not just the average ones. These top players are an essential part of the dataset and should be included, although they might skew the dataset because of their fame premium.*
+
+### External/Internal Validity
+
+Internal Validity:  
+
+1. Simultaneous Causality Bias: There may be some simulaneous causality bias occurring in the regression since PTS is a component of the PER formula. However, from the correlation matrix above, the correlations are not too great.  
+2. Omitted Variable Bias: Since our model shows an increase for the PER coefficient from regression 3 to 4, there is some downward omitted variable bias in regression 3. However, adding USG^2 also increased the adjusted R2 value indicating a better fit. Therefore, our baseline regression model 4 likely has less omitted variable bias compared to the previous models.  
+
+External Validity:  
+
+1. Selection bias: Our analysis may or may not be applicable for the whole NBA timeline since many older players did not have all the necessary data included. Therefore, it may not be representative of the whole NBA population. The same could be applied to years after 2017 since our salary dataset only has data up to that season.
